@@ -13,8 +13,7 @@ data/
 *.sqlite
 *.sqlite3
 
-# Formal project documents - intentionally NOT published yet
-docs/
+# Formal project documents - published only when explicitly included
 SOURCE/
 *.pdf
 *.docx
@@ -22,6 +21,10 @@ SOURCE/
 *.pptx
 AEGIS_SRS*
 proposal*
+
+# FYP deliverables kept in docs/ are published
+!docs/
+!docs/*.pdf
 
 # Secrets / environment
 .env
