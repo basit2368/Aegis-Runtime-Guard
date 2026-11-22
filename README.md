@@ -22,7 +22,7 @@ This repository contains the **FYP-I committed implementation**: core components
 | C9 | Baseline Systems | `aegis/baselines.py` — unprotected and static-permission agents |
 | C10 | Experimental Evaluation | `aegis/scenarios.py`, `aegis/evaluation.py` — 12 scenarios, 51 labelled actions |
 
-Supporting deliverables: controlled executor (`aegis/executor.py`), operator dashboard (`aegis/dashboard.py`), CLI (`aegis/cli.py`), unit/integration tests (`aegis/tests/`), and the implementation report (`docs/FYP-I_Implementation_Report.md`).
+Supporting deliverables: controlled executor (`aegis/executor.py`), operator dashboard (`aegis/dashboard.py`), CLI (`aegis/cli.py`) and unit/integration tests (`aegis/tests/`).
 
 ---
 
@@ -70,7 +70,7 @@ Example: reading `.env` during a bug-fix task → `DENY` by rule `P004` (CRITICA
 
 ## 4. Evaluation results (FYP-I)
 
-Corpus: **12 scenarios / 51 labelled actions** (27 validation, 24 held-out test; 27 legitimate, 24 adversarial). Risk parameters are tuned only on the validation split, then frozen for the test split.
+FYP-I prototype corpus: **12 scenarios / 51 labelled actions** (27 validation, 24 held-out test; 27 legitimate, 24 adversarial). Risk parameters are tuned only on the validation split, then frozen for the test split. The full benchmark suite (at least 30 legitimate and 30 adversarial cases, with statistical hypothesis testing) is planned for FYP-II.
 
 Tuned model: `wI=0.30, wS=0.50, wP=0.20`, `θ_allow=0.45`, `θ_deny=0.50`.
 
@@ -82,7 +82,7 @@ Tuned model: `wI=0.30, wS=0.50, wP=0.20`, `θ_allow=0.45`, `θ_deny=0.50`.
 
 Decision overhead relative to the simulated 5 ms execution cost: **≈7–10%** (timing varies per run). Audit hash chain: **valid**. Full machine-readable results for the latest run: `data/evaluation_results.json`.
 
-> These results demonstrate the prototype on a **small, controlled scenario corpus**. They are not a claim of general real-world agent security; larger-scale statistical evaluation belongs to FYP-II.
+> These results demonstrate the prototype on a **small, controlled scenario corpus**. They are not a claim of general real-world agent security. FYP-II will expand this into a benchmark suite of at least 30 legitimate and 30 adversarial cases and add full statistical analysis.
 
 ---
 
@@ -108,9 +108,7 @@ D:\AEGIS FYP\
 │   ├── evaluation.py        C10 metrics, tuning and comparison
 │   ├── dashboard.py         operator web console (stdlib)
 │   ├── cli.py               command-line interface
-│   └── tests/test_core.py   19 unit/integration tests
-├── docs/
-│   └── FYP-I_Implementation_Report.md
+│   └── tests/test_core.py   unit/integration tests
 ├── data/                    generated audit DB and evaluation results
 ├── run_demo.py              CLI launcher
 ├── run_dashboard.py         dashboard launcher
