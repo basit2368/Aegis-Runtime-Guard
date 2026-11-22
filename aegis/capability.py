@@ -71,8 +71,12 @@ class CapabilityManager:
         self._issued[token] = cap
         return cap
 
-    def validate(self, token: str) -> Tuple[Optional[Capability], str]:
-        """Return ``(capability, reason)``; capability is ``None`` when invalid."""
+    def validate(self, token: str, task_id: Optional[str] = None) -> Tuple[Optional[Capability], str]:
+        """Return ``(capability, reason)``; capability is ``None`` when invalid.
+
+        When ``task_id`` is supplied the token must belong to that exact task,
+        which prevents a valid capability from being replayed across tasks.
+        """
         if not token or "." not in token:
             return None, "Malformed capability token"
         body, supplied_sig = token.rsplit(".", 1)
@@ -83,6 +87,8 @@ class CapabilityManager:
             payload = json.loads(_b64decode(body).decode("utf-8"))
         except Exception:
             return None, "Capability payload cannot be decoded"
+        if task_id is not None and str(payload.get("task_id", "")) != task_id:
+            return None, "Capability does not belong to this task"
         if payload.get("status") != "ACTIVE" or body in self._revoked:
             return None, "Capability has been revoked"
         if float(payload.get("expires_at", 0)) <= now_ts():

@@ -37,6 +37,7 @@ class IntentProfile:
     network_policy: str = "restricted"  # restricted | denied | allowed
     confidence: float = 0.7
     source: str = "deterministic"
+    fallback_reason: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -83,7 +84,9 @@ class Capability:
     signature: str = ""
 
     def is_expired(self, at: Optional[float] = None) -> bool:
-        return (at or now_ts()) >= self.expires_at
+        # ``at=0.0`` is a valid epoch instant; do not treat it as falsy.
+        current = now_ts() if at is None else at
+        return current >= self.expires_at
 
     def to_dict(self) -> Dict[str, Any]:
         return {
