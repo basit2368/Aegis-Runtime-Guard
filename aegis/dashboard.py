@@ -96,11 +96,21 @@ async function registerTask(){
   await loadState();
 }
 async function submitAction(){
+  let params;
+  try {
+    params = JSON.parse(document.getElementById('params').value||'{}');
+    if(params===null || typeof params!=='object' || Array.isArray(params)){
+      throw new Error('Parameters must be a JSON object');
+    }
+  } catch(err) {
+    alert('Invalid parameters JSON: '+err.message);
+    return;
+  }
   const body={task_id:document.getElementById('taskId').value || taskId,
     operation:document.getElementById('operation').value,
     resource:document.getElementById('resource').value,
     source:document.getElementById('source').value,
-    params:JSON.parse(document.getElementById('params').value||'{}')};
+    params:params};
   const data = await post('/api/actions',body);
   if(data.error){alert(data.error);return;}
   const d = data.decision;
@@ -122,6 +132,10 @@ async function runEvaluation(){
 loadState();
 </script>
 </body></html>"""
+
+
+# Only one evaluation should write the shared results file at a time.
+_EVALUATION_LOCK = threading.Lock()
 
 
 class AegisHandler(BaseHTTPRequestHandler):
@@ -202,11 +216,12 @@ class AegisHandler(BaseHTTPRequestHandler):
                 self._send(400, {"error": str(exc)})
             return
         if parsed.path == "/api/evaluate":
-            try:
-                results = run_evaluation(config=self.config, save=True)
-                self._send(200, {"summary": format_summary(results)})
-            except Exception as exc:  # noqa: BLE001
-                self._send(500, {"error": str(exc)})
+            with _EVALUATION_LOCK:
+                try:
+                    results = run_evaluation(config=self.config, save=True)
+                    self._send(200, {"summary": format_summary(results)})
+                except Exception as exc:  # noqa: BLE001
+                    self._send(500, {"error": str(exc)})
             return
         self._send(404, {"error": "Not found"})
 

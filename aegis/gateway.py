@@ -6,6 +6,7 @@ agent tool call passes before it can reach an external tool (FR-012, FR-013).
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -41,63 +42,73 @@ class AegisGateway:
         self.executor = ControlledExecutor(self.config)
         self.tasks: Dict[str, Task] = {}
         self._task_capability: Dict[str, Capability] = {}
+        # Reentrant lock: authorize/get_task and other helpers may nest calls.
+        # The dashboard's ThreadingHTTPServer shares one gateway across threads.
+        self._lock = threading.RLock()
 
     def register_task(self, description: str, owner: str = "operator") -> Task:
         """Create a task, analyze its intent and issue a scoped capability."""
-        task = Task(id=new_id("TASK"), description=description, owner=owner)
-        intent = self.intent_analyzer.analyze(task)
-        task.intent = intent
-        task.status = "ACTIVE"
-        capability = self.capabilities.issue(task, intent)
-        self.tasks[task.id] = task
-        self._task_capability[task.id] = capability
-        self.audit.log_task(task)
-        self.audit.log_capability(task.id, capability.to_dict())
-        return task
+        with self._lock:
+            task = Task(id=new_id("TASK"), description=description, owner=owner)
+            intent = self.intent_analyzer.analyze(task)
+            task.intent = intent
+            task.status = "ACTIVE"
+            capability = self.capabilities.issue(task, intent)
+            self.tasks[task.id] = task
+            self._task_capability[task.id] = capability
+            self.audit.log_task(task)
+            self.audit.log_capability(task.id, capability.to_dict())
+            return task
 
     def get_task(self, task_id: str) -> Task:
-        try:
-            return self.tasks[task_id]
-        except KeyError as exc:
-            raise KeyError(f"Unknown task: {task_id}") from exc
+        with self._lock:
+            try:
+                return self.tasks[task_id]
+            except KeyError as exc:
+                raise KeyError(f"Unknown task: {task_id}") from exc
 
     def capability_for(self, task_id: str) -> Capability:
-        return self._task_capability[task_id]
+        with self._lock:
+            return self._task_capability[task_id]
 
     def revoke_capability(self, task_id: str) -> bool:
         """Revoke a task's capability; the next action is denied."""
-        cap = self._task_capability.get(task_id)
-        if not cap:
-            return False
-        revoked = self.capabilities.revoke(cap.token)
-        if revoked:
-            self.audit.log(
-                "CAPABILITY_REVOKED", {"task_id": task_id, "token_prefix": cap.token[:12]}, task_id
-            )
-        return revoked
+        with self._lock:
+            cap = self._task_capability.get(task_id)
+            if not cap:
+                return False
+            revoked = self.capabilities.revoke(cap.token)
+            if revoked:
+                self.audit.log(
+                    "CAPABILITY_REVOKED",
+                    {"task_id": task_id, "token_prefix": cap.token[:12]},
+                    task_id,
+                )
+            return revoked
 
     def authorize(self, task_id: str, action: ActionRequest) -> Decision:
         """Authorize one action without executing it."""
         started = time.perf_counter()
-        task = self.get_task(task_id)
-        if task.intent is None:
-            raise RuntimeError(f"Task {task_id} has no intent profile")
+        with self._lock:
+            task = self.get_task(task_id)
+            if task.intent is None:
+                raise RuntimeError(f"Task {task_id} has no intent profile")
 
-        cap = self._task_capability.get(task_id)
-        capability, reason = (
-            self.capabilities.validate(cap.token)
-            if cap is not None
-            else (None, "No capability was issued for this task")
-        )
-        classification = self.classifier.classify_action(action)
-        policy = self.policy.evaluate(action, task.intent, capability, classification)
-        risk = self.risk.evaluate(action, task.intent, classification)
-        latency = (time.perf_counter() - started) * 1000
-        decision = self.decision_engine.decide(
-            action, task.intent, capability, reason, policy, risk, latency_ms=latency
-        )
-        self.audit.log_decision(decision)
-        return decision
+            cap = self._task_capability.get(task_id)
+            capability, reason = (
+                self.capabilities.validate(cap.token, task_id=task_id)
+                if cap is not None
+                else (None, "No capability was issued for this task")
+            )
+            classification = self.classifier.classify_action(action)
+            policy = self.policy.evaluate(action, task.intent, capability, classification)
+            risk = self.risk.evaluate(action, task.intent, classification)
+            latency = (time.perf_counter() - started) * 1000
+            decision = self.decision_engine.decide(
+                action, task.intent, capability, reason, policy, risk, latency_ms=latency
+            )
+            self.audit.log_decision(decision)
+            return decision
 
     def execute(self, task_id: str, action: ActionRequest) -> Decision:
         """Authorize and, only if allowed, execute the action."""
