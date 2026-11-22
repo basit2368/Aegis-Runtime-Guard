@@ -15,7 +15,7 @@ from aegis.config import Config
 from aegis.decision import DecisionEngine
 from aegis.gateway import AegisGateway
 from aegis.intent import IntentAnalyzer
-from aegis.models import ActionRequest, IntentProfile, PolicyResult, Task
+from aegis.models import ActionRequest, Capability, IntentProfile, PolicyResult, Task
 from aegis.policy import PolicyEngine
 from aegis.resources import ResourceClassifier
 from aegis.risk import RiskEngine
@@ -37,6 +37,20 @@ class AegisTestCase(unittest.TestCase):
         self.tmp.cleanup()
 
 
+class FailingLLM:
+    """LLM adapter stub that always fails."""
+
+    def analyze(self, description: str) -> str:
+        raise RuntimeError("offline")
+
+
+class InvalidJSONLLM:
+    """LLM adapter stub that returns a structurally invalid profile."""
+
+    def analyze(self, description: str) -> str:
+        return '{"expected_operations": "not-a-list"}'
+
+
 class TestIntentAnalyzer(AegisTestCase):
     def test_extracts_operations_and_secrets(self) -> None:
         profile = self.gateway.intent_analyzer.analyze(
@@ -53,6 +67,23 @@ class TestIntentAnalyzer(AegisTestCase):
         profile = IntentAnalyzer().analyze_deterministic("Look at the notes")
         self.assertEqual(profile.expected_operations, {"READ"})
         self.assertIn("DELETE", profile.prohibited_operations)
+
+    def test_llm_failure_falls_back_and_records_reason(self) -> None:
+        analyzer = IntentAnalyzer(FailingLLM())
+        profile = analyzer.analyze(
+            Task(id="T2", description="Fix the authentication bug and run tests")
+        )
+        self.assertEqual(profile.source, "fallback")
+        self.assertIn("offline", profile.fallback_reason)
+        self.assertIn("READ", profile.expected_operations)
+        self.assertIn("WRITE", profile.expected_operations)
+
+    def test_invalid_llm_json_falls_back(self) -> None:
+        analyzer = IntentAnalyzer(InvalidJSONLLM())
+        profile = analyzer.analyze(Task(id="T3", description="Fix the authentication bug"))
+        self.assertEqual(profile.source, "fallback")
+        self.assertIn("invalid", profile.fallback_reason)
+        self.assertIn("READ", profile.expected_operations)
 
 
 class TestCapabilityManager(AegisTestCase):
@@ -87,6 +118,33 @@ class TestCapabilityManager(AegisTestCase):
         self.assertTrue(CapabilityManager.resource_allowed(cap, "src/auth/login.py"))
         self.assertFalse(CapabilityManager.resource_allowed(cap, ".env"))
         self.assertFalse(CapabilityManager.explicitly_allows(cap, ".env"))
+
+    def test_is_expired_honours_explicit_epoch_zero(self) -> None:
+        cap = Capability(
+            token="dummy",
+            task_id="T1",
+            allowed_operations={"READ"},
+            allowed_resources=["docs/*"],
+            denied_resources=[],
+            network_policy="restricted",
+            issued_at=0.0,
+            expires_at=100.0,
+        )
+        self.assertFalse(cap.is_expired(at=0.0))
+        self.assertFalse(cap.is_expired(at=99.9))
+        self.assertTrue(cap.is_expired(at=100.0))
+        self.assertTrue(cap.is_expired(at=200.0))
+
+    def test_cross_task_capability_reuse_is_rejected(self) -> None:
+        task_a = self.gateway.register_task("Fix the bug and run tests")
+        task_b = self.gateway.register_task("Read the documentation")
+        cap_a = self.gateway.capability_for(task_a.id)
+        valid, reason = self.gateway.capabilities.validate(cap_a.token, task_id=task_a.id)
+        self.assertIsNotNone(valid)
+        self.assertIn("valid", reason.lower())
+        valid, reason = self.gateway.capabilities.validate(cap_a.token, task_id=task_b.id)
+        self.assertIsNone(valid)
+        self.assertIn("task", reason.lower())
 
 
 class TestPolicyAndRisk(AegisTestCase):
@@ -242,6 +300,50 @@ class TestBaselines(AegisTestCase):
             baseline.decide("B", build_scenarios()[0].actions[0]).outcome, "ALLOW"
         )
         self.assertEqual(baseline.classifier.classify_action(critical).label, "CRITICAL")
+
+
+class TestDashboard(AegisTestCase):
+    def test_frontend_wraps_parameter_json_parsing(self) -> None:
+        from aegis import dashboard
+
+        source = Path(dashboard.__file__).read_text(encoding="utf-8")
+        self.assertIn("JSON.parse", source)
+        self.assertIn("try {", source)
+        self.assertIn("Invalid parameters JSON", source)
+
+    def test_malformed_request_body_returns_clean_error(self) -> None:
+        import http.client
+        import threading
+        from http.server import ThreadingHTTPServer
+
+        from aegis.dashboard import AegisHandler
+
+        handler = type("TestBoundHandler", (AegisHandler,), {
+            "gateway": self.gateway,
+            "config": self.config,
+        })
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        conn = None
+        try:
+            conn = http.client.HTTPConnection(
+                "127.0.0.1", server.server_address[1], timeout=5
+            )
+            conn.request(
+                "POST", "/api/actions", body="{not-json",
+                headers={"Content-Type": "application/json"},
+            )
+            response = conn.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(response.status, 400)
+            self.assertIn("error", payload)
+        finally:
+            if conn is not None:
+                conn.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == "__main__":
