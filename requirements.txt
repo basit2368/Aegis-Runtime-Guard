@@ -1,0 +1,7 @@
+# AEGIS FYP-I core prototype has no mandatory third-party dependencies.
+# Python >= 3.10 (standard library only) is sufficient for:
+#   - gateway, intent, capability, policy, classifier, risk, decision, audit
+#   - baselines, scenario corpus, evaluation and dashboard
+#
+# Optional tools used during documentation/diagram preparation (not needed to run):
+#   matplotlib>=3.8

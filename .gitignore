@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Generated runtime / evaluation data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Formal project documents - intentionally NOT published yet
+docs/
+SOURCE/
+*.pdf
+*.docx
+*.doc
+*.pptx
+AEGIS_SRS*
+proposal*
+
+# Secrets / environment
+.env
+*.env
+AEGIS_SECRET
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
