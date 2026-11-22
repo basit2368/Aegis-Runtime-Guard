@@ -102,15 +102,25 @@ class IntentAnalyzer:
         self.llm_client = llm_client
 
     def analyze(self, task: Task) -> IntentProfile:
-        """Analyze ``task`` and return a validated intent profile."""
+        """Analyze ``task`` and return a validated intent profile.
+
+        If an LLM adapter is configured but fails or returns an invalid
+        profile, the deterministic analyzer is used and the failure is
+        recorded on the returned profile for auditability.
+        """
         if self.llm_client is not None:
             try:
                 raw = self.llm_client.analyze(task.description)
                 profile = self._from_llm_json(raw, task.description)
                 if profile is not None:
                     return profile
-            except Exception:  # pragma: no cover - depends on external service
-                pass
+                reason = "LLM returned an invalid or incomplete intent profile"
+            except Exception as exc:  # depends on an external service
+                reason = f"LLM intent analysis failed: {exc}"
+            fallback = self.analyze_deterministic(task.description)
+            fallback.source = "fallback"
+            fallback.fallback_reason = reason
+            return fallback
         return self.analyze_deterministic(task.description)
 
     def analyze_deterministic(self, description: str) -> IntentProfile:
@@ -174,9 +184,21 @@ class IntentAnalyzer:
     def _from_llm_json(raw: str, fallback_objective: str) -> Optional[IntentProfile]:
         """Validate and normalise an optional LLM-produced intent profile."""
         data: Dict[str, Any] = json.loads(raw)
-        if not isinstance(data, dict) or "expected_operations" not in data:
+        if not isinstance(data, dict):
             return None
-        ops = {str(o).upper() for o in data.get("expected_operations", [])}
+        raw_ops = data.get("expected_operations")
+        if not isinstance(raw_ops, list) or not raw_ops:
+            return None
+        for key in ("prohibited_operations", "expected_resources", "prohibited_resources"):
+            if not isinstance(data.get(key, []), list):
+                return None
+        confidence = data.get("confidence", 0.7)
+        if not isinstance(confidence, (int, float)) or not 0.0 <= float(confidence) <= 1.0:
+            return None
+        network_policy = str(data.get("network_policy", "restricted"))
+        if network_policy not in ("restricted", "denied", "allowed"):
+            return None
+        ops = {str(o).upper() for o in raw_ops}
         if not ops:
             return None
         bad_ops = {str(o).upper() for o in data.get("prohibited_operations", [])}
